@@ -2,6 +2,13 @@
 using System.Text.Json;
 using ArchiveOrgUploader;
 
+/*
+ * TO DO:
+ *  - Help section
+ *  - Change date format
+ *  - get file type from spreadsheet
+ *  - Log to file
+ */
 
 // STAGE 10 - INIT 
 
@@ -10,7 +17,6 @@ UXHelper uXHelper = new UXHelper(console);
 
 var baseDir = AppContext.BaseDirectory;
 var configPath = Path.Combine(baseDir, "appsettings.json");
-bool upload = false;
 
 // STAGE 20 - GET CONFIG
 uXHelper.ResetScreen("Loading configuration...");
@@ -118,23 +124,30 @@ int successful = 0;
 int skipped = 0;
 int failed = 0;
 int total = dataRows.Count();
+int concurrentFailures = 0;
 
 
 foreach (var row in dataRows)
 {
+    if(concurrentFailures >= config.MaxConcurrentFails)
+    {
+        console.PrintError("Maximum concurrent errors reached. Stopping attempts...");
+        break;
+    }
 
     var fileName = row.Get("FileName").Trim();
 
     if(successful + failed >= config.DefaultBatchSize)
     {
-        console.PrintWarn($"Batch limit reached, skipping '{fileName}'");
+       // console.PrintWarn($"Batch limit reached, skipping '{fileName}'");
         skipped++;
         continue;
     }
 
+
     if (string.IsNullOrWhiteSpace(fileName))
     {
-        console.PrintWarn("Skipping row with no FileName...");
+       // console.PrintWarn("Skipping row with no FileName...");
         skipped++;
         continue;
     }
@@ -142,7 +155,7 @@ foreach (var row in dataRows)
     var existingSuccessTime = row.Get("SuccessfulUploadTime");
     if (config.SkipIfAlreadySuccessful && !string.IsNullOrWhiteSpace(existingSuccessTime))
     {
-        console.PrintWarn($"Skipping '{fileName}' — already uploaded successfully on {existingSuccessTime}.");
+        // console.PrintWarn($"Skipping '{fileName}' — already uploaded successfully on {existingSuccessTime}.");
         skipped++;
         continue;
     }
@@ -150,7 +163,7 @@ foreach (var row in dataRows)
     var filePath = Path.Combine(basePath, fileName);
     if (!File.Exists(filePath))
     {
-        console.PrintWarn($"File not found for row: {filePath}. Skipping.");
+        // console.PrintWarn($"File not found for row: {filePath}. Skipping.");
         skipped++;
         continue;
     }
@@ -188,6 +201,7 @@ foreach (var row in dataRows)
             if (success)
             {
                 successful++;
+                concurrentFailures = 0;
                 console.PrintSuccess($"  SUCCESS: {message}");
                 row.Set("SuccessfulUploadTime", DateTime.Now.ToString("o"));
                 SaveCsv();
@@ -195,6 +209,7 @@ foreach (var row in dataRows)
             else
             {
                 failed++;
+                concurrentFailures++;
                 console.PrintFail($"  FAILED: {message}");
             }
         }
@@ -203,6 +218,8 @@ foreach (var row in dataRows)
             failed++;
             console.PrintError($"  ERROR: {ex.Message}");
         }
+
+
 
         if (config.DelayBetweenUploadsMs > 0)
             await Task.Delay(config.DelayBetweenUploadsMs);
