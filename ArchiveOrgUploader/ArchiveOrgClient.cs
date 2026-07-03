@@ -12,11 +12,12 @@ public class ArchiveOrgClient
     private readonly HttpClient _http;
     private readonly string _accessKey;
     private readonly string _secretKey;
-
-    public ArchiveOrgClient(string accessKey, string secretKey)
+    private readonly bool _derive;
+    public ArchiveOrgClient(string accessKey, string secretKey, bool derive)
     {
         _accessKey = accessKey;
         _secretKey = secretKey;
+        _derive = derive;
         _http = new HttpClient
         {
             Timeout = TimeSpan.FromMinutes(30) // large PDFs / scans can take a while
@@ -49,6 +50,14 @@ public class ArchiveOrgClient
 
         // Auto-create the item if it doesn't already exist.
         request.Headers.TryAddWithoutValidation("x-amz-auto-make-bucket", "1");
+
+        request.Headers.TryAddWithoutValidation("x-archive-meta-language","eng");
+
+        // To-do - figure out metadata type from file - for now everything I'm doing is texts
+        request.Headers.TryAddWithoutValidation("x-archive-meta-mediatype","text");
+
+        // bypass deriving if requested
+        if (!_derive) request.Headers.TryAddWithoutValidation("x-archive-queue-derive", "0");
 
         AddMetaField(request, "title", new[] { title });
         AddMetaField(request, "creator", new[] { author });

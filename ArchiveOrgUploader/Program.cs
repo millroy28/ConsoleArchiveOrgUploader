@@ -112,21 +112,22 @@ if (proceedAnswer == "n" || proceedAnswer == "no")
 // STAGE 50 - SEND TO ARCHIVE.ORG
 uXHelper.ResetScreen("Uploading to Archive.org...");
 
-var client = new ArchiveOrgClient(config.AccessKey, config.SecretKey);
+var client = new ArchiveOrgClient(config.AccessKey, config.SecretKey, config.RequestDeriveProcess);
 
 int successful = 0;
 int skipped = 0;
 int failed = 0;
 int total = dataRows.Count();
 
+
 foreach (var row in dataRows)
 {
 
     var fileName = row.Get("FileName").Trim();
 
-    if(skipped + failed > batchSize)
+    if(successful + failed >= config.DefaultBatchSize)
     {
-        console.PrintWarn("Batch limit reached, skipping '{fileName}'");
+        console.PrintWarn($"Batch limit reached, skipping '{fileName}'");
         skipped++;
         continue;
     }
@@ -167,7 +168,7 @@ foreach (var row in dataRows)
 
     console.PrintDefault($"Uploading '{fileName}' as item '{identifier}'...");
 
-    if (upload)
+    if (config.Upload)
     {
         row.Set("AttemptedUploadTime", DateTime.Now.ToString("o"));
         SaveCsv();
@@ -208,8 +209,8 @@ foreach (var row in dataRows)
     }
     else
     {
-        skipped++;
-        console.PrintWarn("...upload skipped in test mode");
+        successful++;
+        console.PrintSuccess(" Test Mode - Mocked Success! ");
     }
 }
 
