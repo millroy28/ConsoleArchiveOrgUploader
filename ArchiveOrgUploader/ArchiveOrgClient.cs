@@ -1,4 +1,6 @@
-﻿namespace ArchiveOrgUploader;
+﻿using System.Text;
+
+namespace ArchiveOrgUploader;
 
 /// <summary>
 /// Talks to Archive.org's S3-like upload API (IAS3): https://archive.org/developers/ias3.html
@@ -85,10 +87,37 @@ public class ArchiveOrgClient
         }
     }
 
-    private static string EncodeHeaderValue(string value) =>
-        // Archive.org expects percent-encoded UTF-8 for header values containing non-ASCII
-        // or otherwise header-unsafe characters.
-        Uri.EscapeDataString(value);
+    private static string EncodeHeaderValue(string value)
+    {
+        // IAS3 headers expect plain ASCII text as-is (spaces, commas, periods, etc. should
+        // NOT be percent-encoded — doing so causes Archive.org to only partially decode the
+        // value, producing garbled output like "Littlefair%2C%20B.D."). Percent-encoding is
+        // only needed for non-ASCII UTF-8 characters and for CR/LF, which aren't legal in an
+        // HTTP header value at all.
+        var sb = new StringBuilder();
+        var utf8 = Encoding.UTF8.GetBytes(value);
+
+        foreach (var b in utf8)
+        {
+            char c = (char)b;
+
+            if (b >= 0x20 && b < 0x7F && c != '%')
+            {
+                // Printable ASCII (space through ~), left untouched. We also exclude '%'
+                // itself since a literal '%' in the source text would otherwise be
+                // ambiguous with our escaping of other bytes.
+                sb.Append(c);
+            }
+            else
+            {
+                // Non-ASCII byte (part of a multi-byte UTF-8 sequence), control character,
+                // or a literal '%' — percent-encode it.
+                sb.Append('%').Append(b.ToString("X2"));
+            }
+        }
+
+        return sb.ToString();
+    }
 
     private static string Truncate(string s, int max) =>
         string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max] + "...";

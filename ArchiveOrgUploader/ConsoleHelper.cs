@@ -6,9 +6,7 @@ namespace ArchiveOrgUploader
     {
         public void PrintBreaker()
         {
-            Console.WriteLine();
             Console.WriteLine("--------------------------------");
-            Console.WriteLine();
             return;
         }
         public void PrintDefault(string message)
@@ -62,9 +60,16 @@ namespace ArchiveOrgUploader
             ResetColor();
             return;
         }
-        public void PrintHeader(string[] message)
+        public void PrintHeader(string message)
         {
             SetHeaderColor();
+            PrintLine(message);
+            ResetColor();
+            return;
+        }
+        public void PrintSubHeader(string[] message)
+        {
+            SetSubHeaderColor();
             foreach (string s in message)
             {
                 PrintLine(s);
@@ -72,10 +77,10 @@ namespace ArchiveOrgUploader
             ResetColor();
             return;
         }
-        public void PrintHeader(string message)
+        public void PrintSubHeader(string message)
         {
-            SetHeaderColor();
-            PrintLine(message);
+            SetSubHeaderColor();
+            PrintLine("   " + message.ToUpper() + "");
             ResetColor();
             return;
         }
@@ -129,17 +134,26 @@ namespace ArchiveOrgUploader
                 if(parsedInput >  upperBound || parsedInput < lowerBound)
                 {
                     PrintWarn("Input out of bounds!");
+                    ResetColor();
                     return GetIntInput(message, upperBound, lowerBound);
                 }
             } else
             {
                 PrintWarn("Input must be an integer value!");
+                ResetColor();
                 return GetIntInput(message, upperBound, lowerBound);
             }
             ResetColor();
             return parsedInput;
         }
 
+        public void Clear()
+        {
+            Console.Clear();
+            return;
+        }
+
+        // PRIVATE METHODS
         private void PrintLine(string message)
         {
             Console.WriteLine(message);
@@ -155,6 +169,12 @@ namespace ArchiveOrgUploader
             return;
         }
         private void SetHeaderColor()
+        {
+            Console.BackgroundColor = ConsoleColor.DarkCyan;
+            Console.ForegroundColor = ConsoleColor.Black;
+            return;
+        }
+        private void SetSubHeaderColor()
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
             return;

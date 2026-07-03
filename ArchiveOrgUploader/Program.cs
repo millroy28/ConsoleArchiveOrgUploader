@@ -3,22 +3,19 @@ using System.Text.Json;
 using ArchiveOrgUploader;
 
 
-// STAGE 00 - INIT
+// STAGE 10 - INIT 
 
 ConsoleWriter console = new();
-
-console.PrintHeader("ARCHIVE.ORG WEB UPLOADER - V 0.1");
+UXHelper uXHelper = new UXHelper(console);
 
 var baseDir = AppContext.BaseDirectory;
 var configPath = Path.Combine(baseDir, "appsettings.json");
 bool upload = false;
 
-// STAGE 01 - GET CONFIG
-console.PrintBreaker();
-console.PrintHeader("Loading configuration...");
+// STAGE 20 - GET CONFIG
+uXHelper.ResetScreen("Loading configuration...");
 var config = JsonSerializer.Deserialize<Config>(File.ReadAllText(configPath))
              ?? throw new Exception("Could not parse appsettings.json");
-int batchSize = config.DefaultBatchSize;
 
 if (string.IsNullOrWhiteSpace(config.AccessKey) || config.AccessKey.StartsWith("YOUR_"))
 {
@@ -34,16 +31,15 @@ if (!File.Exists(configPath))
                        , "...exiting program..."]);
     return;
 }
-
-console.PrintDefault(["CONFIGURATION LOADED"
-                    ,$"Identifier Prefix: {config.ItemIdentifierPrefix}"
-                    ,$"Log File Name: {config.LogFileName}"
-                    ,$"Batch Size: {config.DefaultBatchSize.ToString()}"]);
+int batchSize = config.DefaultBatchSize;
 
 
-// STAGE 02 - GET LOG CSV
-console.PrintBreaker();
-console.PrintHeader("Reading Logfile...");
+// STAGE 30 - PROMPT FOR MODE AND OPTIONS
+config = uXHelper.ConfigMenu(config);
+
+
+// STAGE 40 - GET LOG CSV
+uXHelper.ResetScreen("Reading Logfile...");
 
 var basePath = ConsoleHelpers.GetLocalArchivePath(config);
 var csvPath = Path.Combine(basePath, config.LogFileName);
@@ -101,43 +97,31 @@ for (int r = 1; r < allRows.Count; r++)
 
 console.PrintDefault($"Found {dataRows.Count} row(s) in {config.LogFileName}.");
 
-string mode = console.GetStringInput("Do you wish to proceed? (Y/YES to continue, N/NO to exit, T/TEST to continue without uploading",
-                                     ["y"
-                                     ,"yes"
-                                     ,"n"
-                                     ,"no"
-                                     ,"t"
-                                     ,"test"]);
-mode = mode.ToLower().Trim();
-if (mode == "n" || mode == "no")
+var proceedAnswer = console.GetStringInput("Do you wish to proceed? (Y/N)", ["yes","y","no","n"]);
+
+proceedAnswer = proceedAnswer.ToLower().Trim();
+if (proceedAnswer == "n" || proceedAnswer == "no")
 {
     console.PrintError("...exiting program...");
     return;
 }
-if (mode == "y" ||  mode == "yes")
-{
-    upload = true;
-    string changeBatchSize = console.GetStringInput("Do you wish to change the batch size (number of files to upload)? (Y/N)", ["y", "yes", "n", "no"]);
-    if(changeBatchSize.ToLower().Trim() == "yes" || changeBatchSize.ToLower().Trim() == "y")
-    {
-        batchSize = console.GetIntInput("Enter desired batch size: ", 200, 0);
-    }
-}
 
-// STAGE 03 - SEND TO ARCHIVE.ORG
-console.PrintBreaker();
-console.PrintHeader("Uploading to Archive.org...");
+
+//
+
+// STAGE 50 - SEND TO ARCHIVE.ORG
+uXHelper.ResetScreen("Uploading to Archive.org...");
 
 var client = new ArchiveOrgClient(config.AccessKey, config.SecretKey);
 
 int successful = 0;
 int skipped = 0;
 int failed = 0;
-int total = 0;
+int total = dataRows.Count();
 
 foreach (var row in dataRows)
 {
-    total++;
+
     var fileName = row.Get("FileName").Trim();
 
     if(skipped + failed > batchSize)
@@ -229,17 +213,18 @@ foreach (var row in dataRows)
     }
 }
 
-// STAGE 04 REPORT
+// STAGE 60 REPORT
 console.PrintBreaker();
-console.PrintHeader("Job Complete!");
-console.PrintDefault([$"Total Files In Log......{total.ToString()}"
-                     ,$"Successfully Uploaded...{successful.ToString()}"
-                     ,$"Skipped.................{skipped.ToString()}"
-                     ,$"Failed..................{failed.ToString()}"]);
+console.PrintSubHeader("Job Complete!");
+console.PrintDefault([$"Total Files In Log...... {total.ToString()}"
+                     ,$"Successfully Uploaded... {successful.ToString()}"
+                     ,$"Skipped................. {skipped.ToString()}"
+                     ,$"Failed.................. {failed.ToString()}"]);
                                                                                 
 
 
-
+// END 
+// 
 
 void SaveCsv()
 {
@@ -258,6 +243,9 @@ public class Config
     public bool SkipIfAlreadySuccessful { get; set; } = true;
     public string LogFileName { get; set; } = "";
     public int DefaultBatchSize {  get; set; } 
+    public bool RequestDeriveProcess { get; set; }
+    public int MaxConcurrentFails { get; set; }
+    public bool Upload { get; set; } = false;
 }
 
 public class ConsoleHelpers
