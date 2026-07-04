@@ -2,7 +2,7 @@
 
 namespace ArchiveOrgUploader
 {
-    class ConsoleWriter
+    public class ConsoleWriter
     {
         public void PrintBreaker()
         {

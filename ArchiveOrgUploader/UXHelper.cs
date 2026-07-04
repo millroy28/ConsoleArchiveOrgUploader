@@ -24,7 +24,7 @@ namespace ArchiveOrgUploader
 
         public void PrintTitle()
         {
-            _console.PrintHeader("  ARCHIVE.ORG WEB UPLOADER - V 0.1  ");
+            _console.PrintHeader("  ARCHIVE.ORG WEB UPLOADER - V 0.2  ");
         }
 
         public void ResetScreen(string subheader)
@@ -101,6 +101,13 @@ namespace ArchiveOrgUploader
                 config.LogFileName = logFileName;
             }
 
+            _console.PrintDefault($"Current Arhcive Directory: {config.ArchiveDirectory}");
+            string archiveDirectory = _console.GetStringInput("Enter new archive directory or leave blank to keep same and press enter: ");
+            if (logFileName.Trim() != "")
+            {
+                config.ArchiveDirectory = archiveDirectory;
+            }
+
             _console.PrintDefault($"Current Batch Size: {config.DefaultBatchSize}");
             int batchSize = _console.GetIntInput("Enter new batch size and press enter (max 200): ", 200, 1);
             config.DefaultBatchSize = batchSize;
@@ -125,6 +132,15 @@ namespace ArchiveOrgUploader
             
 
             return ConfigMenu(config);
+        }
+
+        public bool GetYesOrNo(string message)
+        {
+            message = message + " (Y/N):";
+            string input = _console.GetStringInput(message, ["yes", "y", "no", "n"]);
+            if (input == "y" || input == "yes") return true;
+            else if (input == "n" || input == "no") return false;
+            else return false;
         }
     }
 
