@@ -5,9 +5,8 @@ using ArchiveOrgUploader;
 /*
  * TO DO:
  *  - Help section
- *  - Change date format
- *  - get file type from spreadsheet
- *  - Log to file
+ *  - Add rate limit handling
+ *  - add concurrent error handling
  */
 
 // STAGE 10 - INIT 
@@ -17,6 +16,12 @@ UXHelper uXHelper = new UXHelper(console);
 
 var baseDir = AppContext.BaseDirectory;
 var configPath = Path.Combine(baseDir, "appsettings.json");
+
+// Verbose run log — separate from ArchiveOrgLog.csv, which only tracks per-row timestamps.
+// One timestamped file per run, written next to the exe.
+var logFilePath = Path.Combine(baseDir, $"UploadLog_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+var logger = new FileLogger(logFilePath);
+logger.Info("=== ArchiveOrgUploader run started ===");
 
 // STAGE 20 - GET CONFIG
 uXHelper.ResetScreen("Loading configuration...");
@@ -49,7 +54,7 @@ uXHelper.ResetScreen("Reading Logfile...");
 
 var basePath = ConsoleHelpers.GetLocalArchivePath(config);
 var csvPath = Path.Combine(basePath, config.LogFileName);
- 
+
 string[] requiredColumns =
 {
     "FileName", "PublicationDate", "Title", "Topics", "Category",
@@ -57,7 +62,7 @@ string[] requiredColumns =
     "AttemptedUploadTime", "SuccessfulUploadTime"
 };
 
-string rawText="";
+string rawText = "";
 try
 {
     rawText = File.ReadAllText(csvPath);
@@ -102,8 +107,10 @@ for (int r = 1; r < allRows.Count; r++)
 }
 
 console.PrintDefault($"Found {dataRows.Count} row(s) in {config.LogFileName}.");
+console.PrintDefault($"Verbose run log: {logFilePath}");
+logger.Info($"Loaded {dataRows.Count} row(s) from '{csvPath}'.");
 
-var proceedAnswer = console.GetStringInput("Do you wish to proceed? (Y/N)", ["yes","y","no","n"]);
+var proceedAnswer = console.GetStringInput("Do you wish to proceed? (Y/N)", ["yes", "y", "no", "n"]);
 
 proceedAnswer = proceedAnswer.ToLower().Trim();
 if (proceedAnswer == "n" || proceedAnswer == "no")
@@ -118,7 +125,7 @@ if (proceedAnswer == "n" || proceedAnswer == "no")
 // STAGE 50 - SEND TO ARCHIVE.ORG
 uXHelper.ResetScreen("Uploading to Archive.org...");
 
-var client = new ArchiveOrgClient(config.AccessKey, config.SecretKey, config.RequestDeriveProcess);
+var client = new ArchiveOrgClient(config.AccessKey, config.SecretKey, config.RequestDeriveProcess, logger);
 
 int successful = 0;
 int skipped = 0;
@@ -129,17 +136,19 @@ int concurrentFailures = 0;
 
 foreach (var row in dataRows)
 {
-    if(concurrentFailures >= config.MaxConcurrentFails)
+    if (concurrentFailures >= config.MaxConcurrentFails)
     {
         console.PrintError("Maximum concurrent errors reached. Stopping attempts...");
+        logger.Error($"Aborting run: {concurrentFailures} concurrent failures reached MaxConcurrentFails ({config.MaxConcurrentFails}).");
         break;
     }
 
     var fileName = row.Get("FileName").Trim();
 
-    if(successful + failed >= config.DefaultBatchSize)
+    if (successful + failed >= config.DefaultBatchSize)
     {
-       // console.PrintWarn($"Batch limit reached, skipping '{fileName}'");
+   //     console.PrintWarn($"Batch limit reached, skipping '{fileName}'");
+        logger.Info($"SKIPPED '{fileName}': batch limit ({config.DefaultBatchSize}) reached.");
         skipped++;
         continue;
     }
@@ -147,7 +156,8 @@ foreach (var row in dataRows)
 
     if (string.IsNullOrWhiteSpace(fileName))
     {
-       // console.PrintWarn("Skipping row with no FileName...");
+     //   console.PrintWarn("Skipping row with no FileName...");
+        logger.Warn("SKIPPED a row with no FileName.");
         skipped++;
         continue;
     }
@@ -155,7 +165,8 @@ foreach (var row in dataRows)
     var existingSuccessTime = row.Get("SuccessfulUploadTime");
     if (config.SkipIfAlreadySuccessful && !string.IsNullOrWhiteSpace(existingSuccessTime))
     {
-        // console.PrintWarn($"Skipping '{fileName}' — already uploaded successfully on {existingSuccessTime}.");
+       // console.PrintWarn($"Skipping '{fileName}' — already uploaded successfully on {existingSuccessTime}.");
+        logger.Info($"SKIPPED '{fileName}': already uploaded successfully on {existingSuccessTime}.");
         skipped++;
         continue;
     }
@@ -163,7 +174,8 @@ foreach (var row in dataRows)
     var filePath = Path.Combine(basePath, fileName);
     if (!File.Exists(filePath))
     {
-        // console.PrintWarn($"File not found for row: {filePath}. Skipping.");
+    //    console.PrintWarn($"File not found for row: {filePath}. Skipping.");
+        logger.Warn($"SKIPPED '{fileName}': file not found at '{filePath}'.");
         skipped++;
         continue;
     }
@@ -173,13 +185,21 @@ foreach (var row in dataRows)
     var title = row.Get("Title");
     var topics = row.Get("Topics");
     var author = row.Get("AuthorOrSubject");
-    var publishedDate = row.Get("PublicationDate");
+    var rawPublishedDate = row.Get("PublicationDate");
+    var (publishedDate, dateParsed) = DateHelper.ToIso8601(rawPublishedDate);
+    if (!dateParsed && !string.IsNullOrWhiteSpace(rawPublishedDate))
+    {
+        console.PrintWarn($"  Could not confidently parse PublicationDate '{rawPublishedDate}' for '{fileName}'; sending as-is.");
+        logger.Warn($"Unparseable PublicationDate '{rawPublishedDate}' for '{fileName}'; sending original value unchanged.");
+    }
+    var mediaType = MediaTypeHelper.GetMediaType(fileName);
     var description = string.Join(
         " ",
         new[] { row.Get("GeneratedDescription"), row.Get("AdditionalDescription") }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     console.PrintDefault($"Uploading '{fileName}' as item '{identifier}'...");
+    logger.Info($"Row: file='{fileName}' identifier='{identifier}' mediaType='{mediaType}' date='{publishedDate}'");
 
     if (config.Upload)
     {
@@ -188,21 +208,25 @@ foreach (var row in dataRows)
 
         try
         {
-            var (success, message) = await client.UploadAsync(
-                filePath,
-                identifier,
-                fileName,
-                title,
-                topics,
-                author,
-                description,
-                publishedDate);
+            var (success, message) = await ProgressIndicator.RunAsync(
+                $"  Uploading '{fileName}'",
+                () => client.UploadAsync(
+                    filePath,
+                    identifier,
+                    fileName,
+                    title,
+                    topics,
+                    author,
+                    description,
+                    publishedDate,
+                    mediaType));
 
             if (success)
             {
                 successful++;
                 concurrentFailures = 0;
                 console.PrintSuccess($"  SUCCESS: {message}");
+                logger.Info($"SUCCESS uploading '{fileName}': {message}");
                 row.Set("SuccessfulUploadTime", DateTime.Now.ToString("o"));
                 SaveCsv();
             }
@@ -211,12 +235,14 @@ foreach (var row in dataRows)
                 failed++;
                 concurrentFailures++;
                 console.PrintFail($"  FAILED: {message}");
+                logger.Warn($"FAILED uploading '{fileName}': {message}");
             }
         }
         catch (Exception ex)
         {
             failed++;
             console.PrintError($"  ERROR: {ex.Message}");
+            logger.Error($"EXCEPTION uploading '{fileName}': {ex}");
         }
 
 
@@ -238,7 +264,10 @@ console.PrintDefault([$"Total Files In Log...... {total.ToString()}"
                      ,$"Successfully Uploaded... {successful.ToString()}"
                      ,$"Skipped................. {skipped.ToString()}"
                      ,$"Failed.................. {failed.ToString()}"]);
-                                                                                
+console.PrintDefault($"Verbose run log: {logFilePath}");
+
+logger.Info($"=== Run complete. Total={total} Successful={successful} Skipped={skipped} Failed={failed} ===");
+
 
 
 // END 
@@ -260,7 +289,7 @@ public class Config
     public int DelayBetweenUploadsMs { get; set; } = 2000;
     public bool SkipIfAlreadySuccessful { get; set; } = true;
     public string LogFileName { get; set; } = "";
-    public int DefaultBatchSize {  get; set; } 
+    public int DefaultBatchSize { get; set; }
     public bool RequestDeriveProcess { get; set; }
     public int MaxConcurrentFails { get; set; }
     public bool Upload { get; set; } = false;

@@ -13,11 +13,14 @@ public class ArchiveOrgClient
     private readonly string _accessKey;
     private readonly string _secretKey;
     private readonly bool _derive;
-    public ArchiveOrgClient(string accessKey, string secretKey, bool derive)
+    private readonly FileLogger _logger;
+
+    public ArchiveOrgClient(string accessKey, string secretKey, bool derive, FileLogger logger)
     {
         _accessKey = accessKey;
         _secretKey = secretKey;
         _derive = derive;
+        _logger = logger;
         _http = new HttpClient
         {
             Timeout = TimeSpan.FromMinutes(30) // large PDFs / scans can take a while
@@ -32,9 +35,15 @@ public class ArchiveOrgClient
         string topics,
         string author,
         string description,
-        string publicationDate)
+        string publicationDate,
+        string mediaType)
     {
         var url = $"https://s3.us.archive.org/{identifier}/{Uri.EscapeDataString(remoteFileName)}";
+
+        _logger.Info($"Preparing upload: file='{filePath}' identifier='{identifier}' " +
+                     $"remoteFileName='{remoteFileName}' mediaType='{mediaType}' derive={_derive}");
+        _logger.Info($"Metadata: title='{title}' topics='{topics}' author='{author}' " +
+                     $"date='{publicationDate}' description='{description}'");
 
         await using var fileStream = File.OpenRead(filePath);
         using var content = new StreamContent(fileStream);
@@ -51,10 +60,11 @@ public class ArchiveOrgClient
         // Auto-create the item if it doesn't already exist.
         request.Headers.TryAddWithoutValidation("x-amz-auto-make-bucket", "1");
 
-        request.Headers.TryAddWithoutValidation("x-archive-meta-language","eng");
+        request.Headers.TryAddWithoutValidation("x-archive-meta-language", "eng");
 
-        // To-do - figure out metadata type from file - for now everything I'm doing is texts
-        request.Headers.TryAddWithoutValidation("x-archive-meta-mediatype","text");
+        // Derived from the file's extension via MediaTypeHelper (see Program.cs), rather than
+        // hardcoded, so PDFs, images, audio, and video all land in the right Archive.org bucket.
+        request.Headers.TryAddWithoutValidation("x-archive-meta-mediatype", mediaType);
 
         // bypass deriving if requested
         if (!_derive) request.Headers.TryAddWithoutValidation("x-archive-queue-derive", "0");
@@ -68,13 +78,20 @@ public class ArchiveOrgClient
         var topicList = topics.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         AddMetaField(request, "subject", topicList);
 
-        // Extension point: PublicationDate and Category are read from the CSV (see Program.cs)
-        // but aren't sent as metadata yet. To wire them in, add e.g.:
+        // publicationDate is expected to already be normalized to YYYY-MM-DD by DateHelper
+        // (see Program.cs) — Archive.org only reliably parses the "date" field in that form.
         AddMetaField(request, "date", new[] { publicationDate });
+        // Extension point: Category isn't sent as metadata yet. To wire it in, add e.g.:
         //   AddMetaField(request, "collection", new[] { someCollectionForCategory });
 
         var response = await _http.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
+
+        if (response.IsSuccessStatusCode)
+            _logger.Info($"Response for '{identifier}': {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
+        else
+            _logger.Error($"Response for '{identifier}': {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
+
         return (response.IsSuccessStatusCode, $"{(int)response.StatusCode} {response.ReasonPhrase} {Truncate(body, 300)}");
     }
 
