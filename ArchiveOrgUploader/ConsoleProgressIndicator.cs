@@ -26,6 +26,26 @@ public static class ProgressIndicator
         }
     }
 
+    /// <summary>
+    /// Counts down from <paramref name="totalMs"/> to zero on the console, one second at a
+    /// time (rounded up), so a cool-off period between requests is visibly happening rather
+    /// than looking like the program has stalled. Used for both the routine delay between
+    /// uploads and any extra backoff applied after Archive.org signals it's overloaded.
+    /// </summary>
+    public static async Task CountdownAsync(string label, int totalMs)
+    {
+        if (totalMs <= 0) return;
+
+        int totalSeconds = Math.Max(1, (int)Math.Ceiling(totalMs / 1000.0));
+        for (int remaining = totalSeconds; remaining > 0; remaining--)
+        {
+            Console.Write($"\r{label} {remaining,3}s remaining... ");
+            await Task.Delay(1000);
+        }
+
+        ClearLine();
+    }
+
     private static async Task AnimateAsync(string label, CancellationToken token)
     {
         var start = DateTime.UtcNow;

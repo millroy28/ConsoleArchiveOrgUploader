@@ -27,7 +27,7 @@ public class ArchiveOrgClient
         };
     }
 
-    public async Task<(bool Success, string Message)> UploadAsync(
+    public async Task<(bool Success, bool rateLimited, string Message)> UploadAsync(
         string filePath,
         string identifier,
         string remoteFileName,
@@ -62,6 +62,9 @@ public class ArchiveOrgClient
 
         request.Headers.TryAddWithoutValidation("x-archive-meta-language", "eng");
 
+        // Accept reduced priority - we're in no hurry
+        request.Headers.TryAddWithoutValidation("X-Accept-Reduced-Priority", "1");
+
         // Derived from the file's extension via MediaTypeHelper (see Program.cs), rather than
         // hardcoded, so PDFs, images, audio, and video all land in the right Archive.org bucket.
         request.Headers.TryAddWithoutValidation("x-archive-meta-mediatype", mediaType);
@@ -82,17 +85,30 @@ public class ArchiveOrgClient
         // (see Program.cs) — Archive.org only reliably parses the "date" field in that form.
         AddMetaField(request, "date", new[] { publicationDate });
         // Extension point: Category isn't sent as metadata yet. To wire it in, add e.g.:
-        //   AddMetaField(request, "collection", new[] { someCollectionForCategory });
+        // TEST COLLECTION FOR NOW
+        AddMetaField(request, "collection", new[] { "test_collection" });
+
+        AddMetaField(request, "licenseurl", new[] { "https://creativecommons.org/licenses/by-nc-sa/4.0/" });
 
         var response = await _http.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
 
+        // Per https://archive.org/developers/ias3.html ("Use Limits"), Archive.org's task
+        // queue (which also handles the derive process) can become overloaded independently
+        // of how fast we're sending requests. When it does, it returns 503 with a SlowDown
+        // error body rather than processing the upload. This is distinct from a real failure —
+        // the file wasn't rejected, the backend just needs a longer break before retrying.
+        var rateLimited = response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                           && body.Contains("SlowDown", StringComparison.OrdinalIgnoreCase);
+
         if (response.IsSuccessStatusCode)
             _logger.Info($"Response for '{identifier}': {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
+        else if (rateLimited)
+            _logger.Warn($"Response for '{identifier}': 503 SlowDown (Archive.org task queue overloaded). Body: {body}");
         else
             _logger.Error($"Response for '{identifier}': {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
 
-        return (response.IsSuccessStatusCode, $"{(int)response.StatusCode} {response.ReasonPhrase} {Truncate(body, 300)}");
+        return (response.IsSuccessStatusCode, rateLimited, $"{(int)response.StatusCode} {response.ReasonPhrase} {Truncate(body, 300)}");
     }
 
     private static void AddMetaField(HttpRequestMessage request, string field, IEnumerable<string> values)

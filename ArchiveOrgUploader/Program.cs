@@ -5,6 +5,7 @@ using ArchiveOrgUploader;
 /*
  * TO DO:
  *  - Help section
+ *  - Collection setting
  */
 
 // STAGE 10 - INIT 
@@ -133,6 +134,15 @@ if (!uXHelper.GetYesOrNo("Do you wish to proceed?"))
 
 
 // STAGE 50 - SEND TO ARCHIVE.ORG
+
+// Adaptive delay between uploads. Starts at the configured baseline and is doubled (capped)
+// whenever Archive.org signals its task queue is overloaded (503 SlowDown), then reset back
+// to baseline as soon as an upload succeeds again. See:
+// https://archive.org/developers/ias3.html#use-limits
+const int MaxBackoffMs = 5 * 60 * 1000; // never wait more than 5 minutes between attempts
+int baselineDelayMs = config.DelayBetweenUploadsMs;
+int currentDelayMs = baselineDelayMs;
+
 bool keepRunning = true;
 
 do
@@ -222,7 +232,7 @@ do
 
             try
             {
-                var (success, message) = await ProgressIndicator.RunAsync(
+                var (success, rateLimited, message) = await ProgressIndicator.RunAsync(
                     $"  Uploading '{fileName}'",
                     () => client.UploadAsync(
                         filePath,
@@ -243,6 +253,22 @@ do
                     logger.Info($"SUCCESS uploading '{fileName}': {message}");
                     row.Set("SuccessfulUploadTime", DateTime.Now.ToString("o"));
                     SaveCsv();
+
+                    // Back to baseline now that Archive.org is keeping up again.
+                    currentDelayMs = baselineDelayMs;
+                }
+                else if (rateLimited)
+                {
+                    failed++;
+                    concurrentFailures++;
+                    console.PrintFail($"  RATE LIMITED: {message}");
+                    logger.Warn($"RATE LIMITED uploading '{fileName}': {message}");
+
+                    // Archive.org's task queue is overloaded — double the wait (capped) rather
+                    // than retrying at the same cadence that just got us flagged.
+                    currentDelayMs = Math.Min(MaxBackoffMs, Math.Max(baselineDelayMs, currentDelayMs) * 4);
+                    console.PrintWarn($"  Backing off — next wait increased to {currentDelayMs / 1000.0:0.0}s.");
+                    logger.Warn($"Backing off after SlowDown: currentDelayMs now {currentDelayMs}.");
                 }
                 else
                 {
@@ -259,10 +285,8 @@ do
                 logger.Error($"EXCEPTION uploading '{fileName}': {ex}");
             }
 
-
-
-            if (config.DelayBetweenUploadsMs > 0)
-                await Task.Delay(config.DelayBetweenUploadsMs);
+            if (currentDelayMs > 0)
+                await ProgressIndicator.CountdownAsync("  Cooling off before next upload:", currentDelayMs);
         }
         else
         {
@@ -306,7 +330,7 @@ public class Config
     public string AccessKey { get; set; } = "";
     public string SecretKey { get; set; } = "";
     public string ItemIdentifierPrefix { get; set; } = "";
-    public int DelayBetweenUploadsMs { get; set; } = 2000;
+    public int DelayBetweenUploadsMs { get; set; }
     public bool SkipIfAlreadySuccessful { get; set; } = true;
     public string LogFileName { get; set; } = "";
     public string ArchiveDirectory { get; set; } = "";
